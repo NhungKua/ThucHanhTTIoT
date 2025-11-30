@@ -1,0 +1,141 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>DHT11 Realtime Chart</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    body { font-family: Arial, sans-serif; margin: 16px; }
+    h1 { font-size: 20px; margin-bottom: 6px; }
+    #controls { margin-bottom: 12px; }
+    #status { margin-left: 8px; font-weight: bold; }
+    canvas { max-width: 900px; }
+    #values { margin-top: 8px; }
+    #values span { display: inline-block; min-width: 120px; }
+  </style>
+</head>
+<body>
+  <h1>DHT11 Realtime Temperature Chart</h1>
+  <div id="controls">
+    Server: <span id="serverInfo">ws://localhost:3000</span>
+    Status: <span id="status">Disconnected</span>
+  </div>
+
+  <canvas id="tempChart" width="900" height="300"></canvas>
+
+  <div id="values">
+    <span>Temperature: <strong id="tempVal">-- °C</strong></span>
+    <span>Humidity: <strong id="humVal">-- %</strong></span>
+  </div>
+
+  <!-- Chart.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <script>
+    // Cấu hình Chart.js
+    const ctx = document.getElementById('tempChart').getContext('2d');
+    const data = {
+      labels: [], // timestamps
+      datasets: [{
+        label: 'Temperature (°C)',
+        data: [],
+        fill: false,
+        tension: 0.25,
+        borderWidth: 2,
+        pointRadius: 0
+      }]
+    };
+    const config = {
+      type: 'line',
+      data: data,
+      options: {
+        animation: false,
+        responsive: true,
+        scales: {
+          x: {
+            type: 'time',
+            time: { unit: 'second', tooltipFormat: 'HH:mm:ss' },
+            ticks: { autoSkip: true, maxTicksLimit: 20 }
+          },
+          y: { suggestedMin: 0 }
+        }
+      }
+    };
+    const tempChart = new Chart(ctx, config);
+
+    // WebSocket connection to backend
+    const wsUrl = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
+    const statusEl = document.getElementById('status');
+    const tempValEl = document.getElementById('tempVal');
+    const humValEl = document.getElementById('humVal');
+    const serverInfoEl = document.getElementById('serverInfo');
+    serverInfoEl.textContent = wsUrl;
+
+    let ws;
+
+    function connectWS() {
+      ws = new WebSocket(wsUrl);
+      ws.addEventListener('open', () => {
+        statusEl.textContent = 'Connected';
+      });
+      ws.addEventListener('message', ev => {
+        try {
+          const msg = JSON.parse(ev.data);
+          if (msg.from === 'serial' && msg.data) {
+            const d = msg.data;
+            // nếu payload JSON từ Arduino có temp/hum/ts
+            let temp = null, hum = null, ts = Date.now();
+            if (typeof d.temp !== 'undefined') {
+              temp = parseFloat(d.temp);
+            } else if (d.raw) {
+              // try parse raw as JSON string
+              try {
+                const parsed = JSON.parse(d.raw);
+                temp = parsed.temp;
+                hum = parsed.hum;
+              } catch(e) {}
+            }
+            if (typeof d.ts !== 'undefined') {
+              ts = d.ts;
+            }
+
+            if (temp !== null) {
+              // cập nhật giá trị hiển thị
+              tempValEl.textContent = temp.toFixed(2) + ' °C';
+            }
+            if (hum !== null) {
+              humValEl.textContent = parseFloat(hum).toFixed(2) + ' %';
+            }
+
+            // thêm điểm vào chart (dùng timestamp hiện tại nếu không có ts)
+            const pointTime = new Date(ts);
+            data.labels.push(pointTime);
+            data.datasets[0].data.push(temp !== null ? temp : null);
+
+            // giữ cửa sổ thời gian (ví dụ 60 điểm gần nhất)
+            const maxPoints = 60;
+            if (data.labels.length > maxPoints) {
+              data.labels.shift();
+              data.datasets[0].data.shift();
+            }
+            tempChart.update('none');
+          }
+        } catch (err) {
+          console.warn('Invalid WS message', err, ev.data);
+        }
+      });
+      ws.addEventListener('close', () => {
+        statusEl.textContent = 'Disconnected';
+        // thử reconnect sau 2s
+        setTimeout(connectWS, 2000);
+      });
+      ws.addEventListener('error', e => {
+        console.error('WS error', e);
+        ws.close();
+      });
+    }
+
+    connectWS();
+  </script>
+</body>
+</html>
